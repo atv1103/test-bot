@@ -1,0 +1,52 @@
+{
+  "name": "Telegram Bot Dev Container",
+  "dockerComposeFile": "../docker-compose.dev.yml",
+  "service": "devcontainer",
+  "workspaceFolder": "/workspace",
+  
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml",
+        "foxundermoon.shell-format"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.python",
+          "editor.formatOnSave": true
+        },
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "eslint.validate": ["javascript", "typescript"]
+      }
+    }
+  },
+
+  "forwardPorts": [8000, 9001],
+  "portsAttributes": {
+    "8000": {
+      "label": "Whisper API",
+      "onAutoForward": "notify"
+    },
+    "9001": {
+      "label": "OCR API",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "postCreateCommand": "cd /workspace/bot && npm install",
+  
+  "remoteUser": "node",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  }
+}
