@@ -6,6 +6,10 @@ services:
     container_name: whispercpp
     ports:
       - "8000:8000"
+    volumes:
+      - whisper_tmp:/tmp
+    networks:
+      - bot_network
     restart: always
   
   ocr:
@@ -13,14 +17,28 @@ services:
     container_name: ocr
     ports:
       - "9001:9001"
+    volumes:
+      - ocr_tmp:/tmp
+    networks:
+      - bot_network
     restart: always
 
   bot:
     build: ./bot
     container_name: tg-bot
-    restart: always
     env_file:
       - ./bot/.env
     depends_on:
       - whisper
       - ocr
+    volumes:
+      - bot_logs:/app/logs
+      - bot_tmp:/app/tmp
+    networks:
+      - bot_network
+    restart: always
+
+networks:
+  bot_network:
+    driver: bridge
+

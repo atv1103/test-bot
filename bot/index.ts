@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 import fs from "fs";
 import FormData from "form-data";
 import cron from "node-cron";
+import { autoRetry } from "@grammyjs/auto-retry";
+import { limit } from "@grammyjs/ratelimiter";
 
 dotenv.config();
 
@@ -294,6 +296,19 @@ async function checkWhisperHealth(): Promise<void> {
 // Проверяем каждые 60 секунд
 setInterval(checkWhisperHealth, 60000);
 
+async function checkOcrHealth(): Promise<void> {
+  try {
+    const r = await axios.get(`${OCR_URL.replace('/ocr', '')}/health`, {
+      timeout: 5000
+    });
+    if (r.status !== 200) throw new Error("OCR не отвечает");
+  } catch (e) {
+    await notifyAdmin("⚠️ OCR сервис недоступен!");
+  }
+}
+
+setInterval(checkOcrHealth, 60000);
+
 // ===========================
 // Graceful shutdown
 // ===========================
@@ -309,6 +324,13 @@ process.on("SIGINT", shutdown);
 // ===========================
 // Запуск
 // ===========================
+
+bot.api.config.use(autoRetry());
+bot.use(limit({
+  timeFrame: 2000,  
+  limit: 1,         
+}));
+
 bot.start().then(() => {
   console.log("✅ Bot started successfully");
 }).catch((err) => {
