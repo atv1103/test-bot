@@ -1,0 +1,4 @@
+Flask==3.0.3
+APScheduler==3.10.4 
+ffmpeg-python==0.2.0 
+requests==2.32.3

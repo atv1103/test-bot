@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  whisper:
+    build: ./whisper
+    container_name: whispercpp
+    ports:
+      - "8000:8000"
+    restart: always
+  
+  ocr:
+    build: ./ocr
+    container_name: ocr
+    ports:
+      - "9001:9001"
+    restart: always
+
+  bot:
+    build: ./bot
+    container_name: tg-bot
+    restart: always
+    env_file:
+      - ./bot/.env
+    depends_on:
+      - whisper
+      - ocr
