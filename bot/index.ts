@@ -7,142 +7,175 @@ import cron from "node-cron";
 
 dotenv.config();
 
-const bot = new Bot(process.env.BOT_TOKEN);
+// ✅ Валидация ENV переменных
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const WHISPER_URL = process.env.WHISPER_URL;
+const OCR_URL = process.env.OCR_URL;
 const ADMIN_ID = process.env.ADMIN_ID;
+
+if (!BOT_TOKEN || !WHISPER_URL || !OCR_URL) {
+  console.error("❌ Missing required ENV variables");
+  process.exit(1);
+}
+
+const bot = new Bot(BOT_TOKEN);
 
 // --------------------
 // Функция уведомления
 // --------------------
-async function notifyAdmin(msg) {
-    if (!ADMIN_ID) return;
-    try {
-      await bot.api.sendMessage(ADMIN_ID, `⚠️ Ошибка:\n${msg}`);
-    } catch (e) {}
+async function notifyAdmin(msg: string): Promise<void> {
+  if (!ADMIN_ID) return;
+  try {
+    await bot.api.sendMessage(ADMIN_ID, `⚠️ Ошибка:\n${msg}`);
+  } catch (e) {
+    console.error("Failed to notify admin:", e);
+  }
 }
-
 
 // --------------------
 // Очистка временных файлов
 // --------------------
-function cleanupTmp() {
+function cleanupTmp(): void {
   const tmpDir = "./tmp";
   if (!fs.existsSync(tmpDir)) return;
 
   const now = Date.now();
   const maxAge = 30 * 60 * 1000; // 30 минут
-  fs.readdirSync(tmpDir).forEach(f => {
-    const p = `${tmpDir}/${f}`;
-    try {
-      if (now - fs.statSync(p).mtimeMs > maxAge) fs.unlinkSync(p);
-    } catch {}
-  });
+  
+  try {
+    fs.readdirSync(tmpDir).forEach(f => {
+      const p = `${tmpDir}/${f}`;
+      try {
+        const stats = fs.statSync(p);
+        if (now - stats.mtimeMs > maxAge) {
+          fs.unlinkSync(p);
+        }
+      } catch (err) {
+        console.error(`Error cleaning up ${p}:`, err);
+      }
+    });
+  } catch (err) {
+    notifyAdmin(`Ошибка cron очистки: ${err}`);
+  }
 }
 
-// --------------------
-// Запускаем cron каждые 10 минут
-// --------------------
-cron.schedule("*/10 * * * *", () => {
+// Запускаем cron каждые 15 минут
+cron.schedule("*/15 * * * *", () => {
   cleanupTmp();
 });
 
 // ------------------------------
-//  Очередь задач для аудио
+// ✅ Исправленная очередь задач
 // ------------------------------
+interface QueueTask {
+  id: string;
+  task: () => Promise<void>;
+}
 
-// let queue = Promise.resolve();
-
-// function enqueue(task) {
-//   queue = queue.then(task).catch(console.error);
-//   return queue;
-// }
-
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
-// Обработай ошибку переполнения очереди задач
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
-let queue = [];
+const taskQueue: QueueTask[] = [];
 const QUEUE_LIMIT = 5;
+let isProcessing = false;
 
-async function processAudioTask(task) {
-  if (queue.length >= QUEUE_LIMIT) {
-    notifyAdmin(`Переполнение очереди задач: ${queue.length}/${QUEUE_LIMIT}`);
-    return { error: "queue_overflow" };
+async function addToQueue(task: () => Promise<void>): Promise<boolean> {
+  if (taskQueue.length >= QUEUE_LIMIT) {
+    await notifyAdmin(`⚠️ Переполнение очереди: ${taskQueue.length}/${QUEUE_LIMIT}`);
+    return false;
   }
-  queue.push(task);
-  try {
-    return await task();
-  } finally {
-    queue.shift();
+
+  const queueTask: QueueTask = {
+    id: `task_${Date.now()}_${Math.random()}`,
+    task
+  };
+
+  taskQueue.push(queueTask);
+  processQueue();
+  return true;
+}
+
+async function processQueue(): Promise<void> {
+  if (isProcessing || taskQueue.length === 0) return;
+  
+  isProcessing = true;
+
+  while (taskQueue.length > 0) {
+    const queueTask = taskQueue.shift();
+    if (!queueTask) continue;
+
+    try {
+      await queueTask.task();
+    } catch (err) {
+      console.error(`Queue task ${queueTask.id} failed:`, err);
+      await notifyAdmin(`Ошибка задачи ${queueTask.id}: ${err}`);
+    }
   }
+
+  isProcessing = false;
 }
 
 // ===========================
-//   Voice handler
+// Voice handler
 // ===========================
-bot.on("voice", async (ctx) => {
+bot.on("message:voice", async (ctx) => {
   await ctx.reply("⏳ Распознаю речь...");
 
-  // enqueue(async () => {
-  processAudioTask(async () => {
+  const added = await addToQueue(async () => {
+    const tmpDir = "./tmp";
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+    let tmpPath: string | null = null;
+
     try {
-
-      // версия 1
-      // const fileId = ctx.message.voice.file_id;
-
-      // URL файла
-      // const file = await ctx.api.getFile(fileId);
-      // const url = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
-
-      
-      // Скачиваем 
-      // const audio = await axios.get(url, { responseType: "arraybuffer" });
-      // const tmp = `voice_${Date.now()}.ogg`;
-      // fs.writeFileSync(tmp, audio.data);
-
-      // Отправляем в whisper API
-      // const form = new FormData();
-      // form.append("file", fs.createReadStream(tmp));
-
-      // const response = await axios.post(WHISPER_URL, form, {
-      //   headers: form.getHeaders(),
-      // });
-
-      // fs.unlinkSync(tmp);
-
-      // const text = response.data.text?.trim();
-      // await ctx.reply(text || "Не удалось распознать.");
-
-      // версия 2
       const file = await ctx.api.getFile(ctx.message.voice.file_id);
-      const url = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+      const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
-      const tmpDir = "./tmp";
-      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
-      const tmpPath = `${tmpDir}/voice_${Date.now()}.ogg`;
+      tmpPath = `${tmpDir}/voice_${Date.now()}.ogg`;
 
-      const audio = await axios.get(url, { responseType: "arraybuffer" });
-      fs.writeFileSync(tmpPath, audio);
+      // ✅ Добавлен timeout
+      const audio = await axios.get(url, { 
+        responseType: "arraybuffer",
+        timeout: 30000 // 30 секунд
+      });
+      
+      fs.writeFileSync(tmpPath, audio.data);
 
       const form = new FormData();
       form.append("file", fs.createReadStream(tmpPath));
 
-      const r = await axios.post(WHISPER_URL, form, { headers: form.getHeaders() });
-      fs.unlinkSync(tmpPath);
+      // ✅ Добавлен timeout
+      const r = await axios.post(WHISPER_URL, form, { 
+        headers: form.getHeaders(),
+        timeout: 120000 // 2 минуты
+      });
 
-      if (!r.data.text) throw new Error("Whisper вернул пустой текст");
-      await ctx.reply(`Расшифровка:\n${r.data.text}`);
+      if (!r.data.text) {
+        throw new Error("Whisper вернул пустой текст");
+      }
 
+      await ctx.reply(`📝 Расшифровка:\n${r.data.text}`);
 
-    } catch (e) {
-        console.error(e);
-        await notifyAdmin(`Ошибка распознавания: ${e.message}`);
-        await ctx.reply("Ошибка распознавания.");
+    } catch (e: any) {
+      console.error("Voice recognition error:", e);
+      await notifyAdmin(`Ошибка распознавания голоса: ${e.message}`);
+      await ctx.reply("❌ Ошибка распознавания речи.");
+    } finally {
+      // ✅ Гарантированная очистка
+      if (tmpPath && fs.existsSync(tmpPath)) {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch (err) {
+          console.error("Failed to cleanup temp file:", err);
+        }
+      }
     }
   });
+
+  if (!added) {
+    await ctx.reply("⚠️ Очередь переполнена, попробуйте позже.");
+  }
 });
 
 // ===========================
-//   "следующий"
+// "следующий"
 // ===========================
 bot.hears(/следующий/i, async (ctx) => {
   await ctx.reply("<b>========== СЛЕДУЮЩЕЕ ВИДЕО ==========</b>", {
@@ -151,33 +184,41 @@ bot.hears(/следующий/i, async (ctx) => {
 });
 
 // ===========================
-//    Обработка фото
+// Обработка фото
 // ===========================
-// --------- обработка фото (OCR -> code) -----------
-bot.on("photo", async ctx => {
+bot.on("message:photo", async (ctx) => {
   await ctx.reply("🖼 Распознаю текст на фото...");
+
+  const tmpDir = "./tmp";
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+  let tmpPath: string | null = null;
+  let outPath: string | null = null;
 
   try {
     const photoSizes = ctx.message.photo;
-    const fileId = photoSizes[photoSizes.length - 1].file_id; // наибольшее разрешение
+    const fileId = photoSizes[photoSizes.length - 1].file_id;
     const file = await ctx.api.getFile(fileId);
-    const url = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+    const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
-    const tmpDir = "./tmp";
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
-    const tmpPath = `${tmpDir}/img_${Date.now()}.jpg`;
+    tmpPath = `${tmpDir}/img_${Date.now()}.jpg`;
 
-    const img = await axios.get(url, { responseType: "arraybuffer" });
+    // ✅ Добавлен timeout
+    const img = await axios.get(url, { 
+      responseType: "arraybuffer",
+      timeout: 30000 
+    });
+    
     fs.writeFileSync(tmpPath, img.data);
 
-    // отправляем в OCR сервис
     const form = new FormData();
     form.append("file", fs.createReadStream(tmpPath));
 
-    const r = await axios.post(process.env.OCR_URL, form, { headers: form.getHeaders(), timeout: 120000 });
-
-    // удаляем временный
-    try { fs.unlinkSync(tmpPath); } catch {}
+    // ✅ Добавлен timeout
+    const r = await axios.post(OCR_URL, form, { 
+      headers: form.getHeaders(), 
+      timeout: 120000 
+    });
 
     if (r.data && r.data.error) {
       await notifyAdmin(`OCR error: ${r.data.error}`);
@@ -192,80 +233,85 @@ bot.on("photo", async ctx => {
       return;
     }
 
-    // Если короткий текст — отправляем как форматированный блок (HTML <pre>)
     const MAX_INLINE = 4000;
     if (text.length <= MAX_INLINE) {
-      // экранируем для HTML
-      const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      // поместим в <pre>
+      const esc = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
       await ctx.reply(`<pre>${esc}</pre>`, { parse_mode: "HTML" });
       return;
     }
 
-    // Иначе отправляем как файл с расширением по detected lang
+    // Длинный текст → файл
     let ext = lang || "txt";
-    // нормализуем ext: если не короткая строка, сделаем txt
     if (!/^[a-z0-9]{1,5}$/.test(ext)) ext = "txt";
 
     const filename = `code_${Date.now()}.${ext}`;
-    const outPath = `${tmpDir}/${filename}`;
+    outPath = `${tmpDir}/${filename}`;
     fs.writeFileSync(outPath, text);
 
     await ctx.reply("📄 Текст слишком длинный — отправляю файл:");
-    await ctx.replyWithDocument({ source: fs.createReadStream(outPath), filename });
+    await ctx.replyWithDocument({ 
+      source: fs.createReadStream(outPath), 
+      filename 
+    });
 
-    try { fs.unlinkSync(outPath); } catch {}
-
-  } catch (e) {
-    console.error(e);
+  } catch (e: any) {
+    console.error("OCR error:", e);
     await notifyAdmin(`OCR bot error: ${e.message}`);
-    await ctx.reply("Ошибка распознавания текста с фото.");
+    await ctx.reply("❌ Ошибка распознавания текста с фото.");
+  } finally {
+    // ✅ Гарантированная очистка
+    [tmpPath, outPath].forEach(path => {
+      if (path && fs.existsSync(path)) {
+        try {
+          fs.unlinkSync(path);
+        } catch (err) {
+          console.error("Failed to cleanup:", err);
+        }
+      }
+    });
   }
 });
 
-
-
 // ===========================
-//    Ошибки
+// Health check для Whisper
 // ===========================
-
-// Проверка ошибок скачивания аудио node.js
-try {
-    const file = await ctx.getFile();
-    if (!file) throw new Error("Файл не найден");
-
-    const oggPath = await downloadOgg(file);
-} catch (e) {
-    await notifyAdmin(`Ошибка скачивания аудио: ${e.message}`);
-    return ctx.reply("Не удалось скачать аудио.");
-}
-
-// Ошибки отправки в Whisper
-try {
-    const result = await transcribe(oggPath);
-    if (!result.text) throw new Error("Whisper вернул пустой текст");
-} catch (e) {
-    await notifyAdmin(`Ошибка Whisper API: ${e.message}`);
-    return ctx.reply("Whisper недоступен.");
-}
-
-async function checkWhisperHealth() {
-    try {
-        const r = await fetch(`${process.env.WHISPER_HOST}/health`);
-        if (!r.ok) throw new Error("Не отвечает");
-    } catch (e) {
-        notifyAdmin("Whisper недоступен! Сервер не отвечает.");
+async function checkWhisperHealth(): Promise<void> {
+  try {
+    const r = await axios.get(`${WHISPER_URL.replace('/stt', '')}/health`, {
+      timeout: 5000
+    });
+    if (r.status !== 200) {
+      throw new Error("Whisper не отвечает");
     }
+  } catch (e) {
+    await notifyAdmin("⚠️ Whisper сервис недоступен!");
+  }
 }
-// проверяем каждые 30 сек
-setInterval(checkWhisperHealth, 30000);
 
+// Проверяем каждые 60 секунд
+setInterval(checkWhisperHealth, 60000);
 
+// ===========================
+// Graceful shutdown
+// ===========================
+async function shutdown(): Promise<void> {
+  console.log("Shutting down bot...");
+  await bot.stop();
+  process.exit(0);
+}
 
-bot.start();
-console.log("Bot started");
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
-
-
-
-
+// ===========================
+// Запуск
+// ===========================
+bot.start().then(() => {
+  console.log("✅ Bot started successfully");
+}).catch((err) => {
+  console.error("❌ Failed to start bot:", err);
+  process.exit(1);
+});

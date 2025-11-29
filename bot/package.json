@@ -2,6 +2,9 @@
   "name": "tg-whisper-bot",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "build": "npm run build"
+  },
   "dependencies": {
     "grammy": "^1.20.0",
     "dotenv": "^16.3.1",
